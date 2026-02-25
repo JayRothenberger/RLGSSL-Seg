@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "stablessl"
+version = "0.0.1"
+authors = [
+  { name="Jay Rothenberger", email="jay.c.rothenberger@gmail.com" },
+]
+description = "An implementation of semi-supervised learning algorithms to use as baselines."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "albumentations"
+            ]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GPL3 License",
+    "Operating System :: Unix",
+    "Topic :: Scientific/Engineering :: Machine Learning",
+]
+
+[project.urls]
+Homepage = "https://github.com/JayRothenberger/Stable-SSL"
+Issues = "https://github.com/JayRothenberger/Stable-SSL/issues"
