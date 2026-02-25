@@ -26,7 +26,6 @@ echo Node IP: $head_node_ip
 
 . /home/fagg/tf_setup.sh
 conda activate /home/jroth/.conda/envs/tree-care-3.9
-wandb login --relogin 61c91ce464da16e3c0dcd699d42ba8e2822b930d
 
 srun torchrun \
 --nnodes $SLURM_JOB_NUM_NODES \
