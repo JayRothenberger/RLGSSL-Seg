@@ -1,4 +1,5 @@
-RDZVID=$RANDOM
+# chosen by a fair dice roll, guaranteed to be random
+RDZVID=B24FC8
 CUDA_LAUNCH_BLOCKING=1
 
 torchrun \
