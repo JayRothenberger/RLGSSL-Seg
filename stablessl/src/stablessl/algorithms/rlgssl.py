@@ -163,6 +163,129 @@ class RLGSSLAlgorithm(AlgorithmBase):
                             unlabeled_logits, dim=1
                         ).detach()
 
+                        # --- patrick change: ignore 255 index ---
+                        num_classes = unlabeled_logits.shape[1]
+                        
+                        # Create a mask so we can ignore 255 pixels during reward calculation
+                        valid_mask = (y != 255).unsqueeze(1).float() 
+                        
+                        # Clamp the targets so one_hot doesn't create an oversized tensor
+                        y_clamped = torch.clamp(y, 0, num_classes - 1)
+
+                        one_hot_labels = torch.nn.functional.one_hot(
+                            y_clamped, num_classes
+                        )
+                        
+                        if len(unlabeled_probs.shape) == 4:
+                            one_hot_labels = one_hot_labels.permute(0, 3, 1, 2).float()
+
+                        # Zero out the ignored pixels in the labeled targets
+                        one_hot_labels = one_hot_labels * valid_mask
+
+                        assert one_hot_labels.shape == unlabeled_probs.shape, (one_hot_labels.shape, unlabeled_probs.shape)
+
+                        mixed_x, mixed_y, lam = mixup(
+                            X, one_hot_labels, U, unlabeled_probs
+                        )
+
+                        # Create a mixed mask to apply to the final MSE reward
+                        mixed_mask = lam + (1 - lam) * valid_mask
+
+                        # calculate the reward
+                        freeze_batchnorm(self.model)
+                        mixed_predictions = self.model(mixed_x)
+                unfreeze_batchnorm(self.model)
+                
+                # compute the RL loss
+                unlabeled_preds = self.model(U)
+
+                assert mixed_predictions.shape == mixed_y.shape, (mixed_predictions.shape, mixed_y.shape)
+
+                # --- patrick change: apply the mask to the mse loss so we don't penalize 255 boundaries ---
+                mse = torch.nn.functional.mse_loss(torch.softmax(mixed_predictions, dim=1), mixed_y, reduction='none')
+                reward = -(mse * mixed_mask)
+
+                # --- patrick change: convert predictions to log-probabilities for kldivloss ---
+                log_unlabeled_preds = torch.nn.functional.log_softmax(unlabeled_preds, dim=1)
+                uniform_probs = torch.full_like(unlabeled_preds, 1.0 / num_classes)
+
+                # kldivloss expects input as log-probs, target as standard probs
+                kl_div = torch.nn.KLDivLoss(reduction="none")(
+                    log_unlabeled_preds, uniform_probs
+                )
+
+                if self.mean_reward:
+                    rl_loss = reward.mean().detach() * kl_div.sum(1).mean()
+                else:
+                    rl_loss = (reward.mean(1).detach() * kl_div.sum(1)).mean()
+
+                # --- patrich change: convert predictions to log-probabilities for consistency loss ---
+                cons_loss = torch.nn.KLDivLoss(reduction="none")(
+                    log_unlabeled_preds, unlabeled_probs
+                ).sum(1).mean()
+
+                # compute the Supervised loss
+                pred = self.model(X)
+
+                predictions.append(pred)
+                ground_truth.append(y)
+
+                sup_loss = loss_fn(pred, y)
+
+                # backprop the combined loss
+                self.step_number += 1
+
+                if self.step_number >= 0 * self.args.accumulate:
+                    total_loss = (1 * rl_loss) + (0.1 * sup_loss) + (0.1 * cons_loss)
+                else:
+                    total_loss = sup_loss
+
+                self.scaled_clipped_gradient_update(
+                    self.model,
+                    total_loss,
+                    self.optimizer,
+                    self.scaler,
+                    i < (self.args.accumulate - 1),
+                )
+        else:
+            # update the teacher
+            self.model_ema.update()
+
+        return torch.cat(predictions, 0).cpu(), torch.cat(ground_truth, 0).cpu()
+        
+    def step_old(self):
+        loss_fn = self.loss_fn
+        
+        predictions = []
+        ground_truth = []
+
+        # compute the soft pseudo label data
+        for i in range(self.args.accumulate):
+            with torch.amp.autocast(device_type="cuda", dtype=self.args.autocast_type):
+                U, U_aug, _ = next(self.dataset.iterable_loaders["unlabeled"])
+                X, X_aug, y = next(self.dataset.iterable_loaders["labeled"])
+
+                X, X_aug, U, U_aug, y = (
+                    X.to(torch.cuda.current_device()),
+                    X_aug.to(torch.cuda.current_device()),
+                    U.to(torch.cuda.current_device()),
+                    U_aug.to(torch.cuda.current_device()),
+                    y.to(torch.cuda.current_device()),
+                )
+
+                with torch.no_grad():
+                    with torch.autocast(
+                        device_type="cuda", dtype=self.args.autocast_type
+                    ):
+                        freeze_batchnorm(self.model)
+                        self.model_ema.apply_shadow()
+                        unlabeled_logits = self.model(U)
+                        self.model_ema.restore()
+
+                        unlabeled_probs = torch.softmax(
+                            unlabeled_logits, dim=1
+                        ).detach()
+
                         # generate the mixup data
                         temp_num_classes = max(y.max().item() + 1, unlabeled_logits.shape[1])
 
