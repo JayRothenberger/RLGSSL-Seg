@@ -162,6 +162,10 @@ def model_run(
     best_val_acc = 0
     best_state = None
     epochs_since_improvement = 0
+    acast_type = getattr(model, "acast_type", torch.float32)
+    if acast_type is None:
+        acast_type = torch.float32
+    amp_enabled = acast_type in (torch.float16, torch.bfloat16)
 
     if int(os.environ.get("WORLD_SIZE")) > 1:
         print(
@@ -192,7 +196,10 @@ def model_run(
             "scheduler_actor": scheduler_actor,
             "scheduler_critic": scheduler_critic,
         }
-        avg_reward, avg_loss = train_fn(**train_args)
+        with torch.amp.autocast(
+            device_type="cuda", dtype=acast_type, enabled=amp_enabled
+        ):
+            avg_reward, avg_loss = train_fn(**train_args)
         gc.collect()
         test_args = {
             "rank": int(os.environ.get("RANK"))
@@ -202,7 +209,10 @@ def model_run(
             "loader": val_loader,
             "loss_fn": model.loss,
         }
-        val_loss, val_acc = test_fn(**test_args)
+        with torch.amp.autocast(
+            device_type="cuda", dtype=acast_type, enabled=amp_enabled
+        ):
+            val_loss, val_acc = test_fn(**test_args)
 
         test_args = {
             "rank": int(os.environ.get("RANK"))

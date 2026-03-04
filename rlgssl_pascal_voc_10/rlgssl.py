@@ -62,7 +62,7 @@ torch.manual_seed(42)
 
 def wandb_init(args):
     wandb.init(
-        "ai2es",
+        "pkage",
         args.project,
         config=vars(args),
         name=f"{args.experiment_type} {args.dataset}",
@@ -232,7 +232,9 @@ def training_process(agent, args, rank, world_size):
     # constructors for the optimization objects
 
     def model_fn():
-        return DeepLabV3_Resnet50()
+        model = DeepLabV3_Resnet50()
+        model.acast_type = torch.float16 # autocast
+        return model
     
 
     def optimizer_fn(named_parameters):
